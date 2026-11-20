@@ -1,0 +1,8 @@
+cn.full.cloud.framework.apilog.config.YudaoApiLogAutoConfiguration
+cn.full.cloud.framework.jackson.config.YudaoJacksonAutoConfiguration
+cn.full.cloud.framework.swagger.config.YudaoSwaggerAutoConfiguration
+cn.full.cloud.framework.web.config.YudaoWebAutoConfiguration
+cn.full.cloud.framework.apilog.config.YudaoApiLogRpcAutoConfiguration
+cn.full.cloud.framework.xss.config.YudaoXssAutoConfiguration
+cn.full.cloud.framework.banner.config.YudaoBannerAutoConfiguration
+cn.full.cloud.framework.encrypt.config.YudaoApiEncryptAutoConfiguration

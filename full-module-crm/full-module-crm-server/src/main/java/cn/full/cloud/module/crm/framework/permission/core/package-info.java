@@ -1,0 +1,1 @@
+package cn.full.cloud.module.crm.framework.permission.core;

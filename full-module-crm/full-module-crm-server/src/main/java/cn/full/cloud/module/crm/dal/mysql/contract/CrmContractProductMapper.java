@@ -1,0 +1,27 @@
+package cn.full.cloud.module.crm.dal.mysql.contract;
+
+
+import cn.full.cloud.framework.mybatis.core.mapper.BaseMapperX;
+import cn.full.cloud.framework.mybatis.core.query.LambdaQueryWrapperX;
+import cn.full.cloud.module.crm.dal.dataobject.contract.CrmContractProductDO;
+import org.apache.ibatis.annotations.Mapper;
+
+import java.util.List;
+
+/**
+ * 合同产品 Mapper
+ *
+ * @author HUIHUI
+ */
+@Mapper
+public interface CrmContractProductMapper extends BaseMapperX<CrmContractProductDO> {
+
+    default List<CrmContractProductDO> selectListByContractId(Long contractId) {
+        return selectList(new LambdaQueryWrapperX<CrmContractProductDO>().eq(CrmContractProductDO::getContractId, contractId));
+    }
+
+    default int deleteByContractId(Long contractId) {
+        return delete(new LambdaQueryWrapperX<CrmContractProductDO>().eq(CrmContractProductDO::getContractId, contractId));
+    }
+
+}

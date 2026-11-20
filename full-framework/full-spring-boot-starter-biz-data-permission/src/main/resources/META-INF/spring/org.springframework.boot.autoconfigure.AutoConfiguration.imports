@@ -1,0 +1,3 @@
+cn.full.cloud.framework.datapermission.config.YudaoDataPermissionAutoConfiguration
+cn.full.cloud.framework.datapermission.config.YudaoDeptDataPermissionAutoConfiguration
+cn.full.cloud.framework.datapermission.config.YudaoDataPermissionRpcAutoConfiguration

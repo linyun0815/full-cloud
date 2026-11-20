@@ -1,0 +1,5 @@
+cn.full.cloud.framework.security.config.YudaoSecurityRpcAutoConfiguration
+cn.full.cloud.framework.security.config.YudaoSecurityAutoConfiguration
+cn.full.cloud.framework.security.config.YudaoWebSecurityConfigurerAdapter
+cn.full.cloud.framework.operatelog.config.YudaoOperateLogConfiguration
+cn.full.cloud.framework.operatelog.config.YudaoOperateLogRpcAutoConfiguration

@@ -1,0 +1,51 @@
+package cn.full.cloud.module.ai.dal.mysql.model;
+
+import cn.full.cloud.framework.common.pojo.PageResult;
+import cn.full.cloud.framework.mybatis.core.mapper.BaseMapperX;
+import cn.full.cloud.framework.mybatis.core.query.LambdaQueryWrapperX;
+import cn.full.cloud.module.ai.controller.admin.model.vo.model.AiModelPageReqVO;
+import cn.full.cloud.module.ai.dal.dataobject.model.AiModelDO;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import org.apache.ibatis.annotations.Mapper;
+
+import javax.annotation.Nullable;
+import java.util.List;
+
+/**
+ * API 模型 Mapper
+ *
+ * @author fansili
+ */
+@Mapper
+public interface AiChatMapper extends BaseMapperX<AiModelDO> {
+
+    default AiModelDO selectFirstByStatus(Integer type, Integer status) {
+        return selectFirstOne(new LambdaQueryWrapperX<AiModelDO>()
+                .eq(AiModelDO::getType, type)
+                .eq(AiModelDO::getStatus, status)
+                .orderByAsc(AiModelDO::getSort));
+    }
+
+    default PageResult<AiModelDO> selectPage(AiModelPageReqVO reqVO) {
+        return selectPage(reqVO, new LambdaQueryWrapperX<AiModelDO>()
+                .likeIfPresent(AiModelDO::getName, reqVO.getName())
+                .eqIfPresent(AiModelDO::getModel, reqVO.getModel())
+                .eqIfPresent(AiModelDO::getPlatform, reqVO.getPlatform())
+                .orderByAsc(AiModelDO::getSort));
+    }
+
+    default List<AiModelDO> selectListByStatusAndType(Integer status, @Nullable Integer type,
+                                                      @Nullable String platform) {
+        return selectList(new LambdaQueryWrapperX<AiModelDO>()
+                .eq(AiModelDO::getStatus, status)
+                .eqIfPresent(AiModelDO::getType, type)
+                .eqIfPresent(AiModelDO::getPlatform, platform)
+                .orderByAsc(AiModelDO::getSort));
+    }
+
+    default void updateForSave(AiModelDO model) {
+        update(model, new LambdaUpdateWrapper<AiModelDO>().eq(AiModelDO::getId, model.getId())
+                .set(model.getReasoningConfig() == null, AiModelDO::getReasoningConfig, null, JDBC_TYPE_VARCHAR));
+    }
+
+}

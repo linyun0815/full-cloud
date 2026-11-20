@@ -1,0 +1,3 @@
+cn.full.cloud.framework.mq.redis.config.YudaoRedisMQProducerAutoConfiguration
+cn.full.cloud.framework.mq.redis.config.YudaoRedisMQConsumerAutoConfiguration
+cn.full.cloud.framework.mq.rabbitmq.config.YudaoRabbitMQAutoConfiguration

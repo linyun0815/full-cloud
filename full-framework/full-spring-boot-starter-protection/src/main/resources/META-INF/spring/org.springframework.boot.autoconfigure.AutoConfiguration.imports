@@ -1,0 +1,4 @@
+cn.full.cloud.framework.idempotent.config.YudaoIdempotentConfiguration
+cn.full.cloud.framework.lock4j.config.YudaoLock4jConfiguration
+cn.full.cloud.framework.ratelimiter.config.YudaoRateLimiterConfiguration
+cn.full.cloud.framework.signature.config.YudaoApiSignatureAutoConfiguration

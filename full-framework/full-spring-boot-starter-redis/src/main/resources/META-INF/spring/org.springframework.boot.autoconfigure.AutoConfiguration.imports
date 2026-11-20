@@ -1,0 +1,2 @@
+cn.full.cloud.framework.redis.config.YudaoRedisAutoConfiguration
+cn.full.cloud.framework.redis.config.YudaoCacheAutoConfiguration
