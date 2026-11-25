@@ -1,8 +1,6 @@
 # Docker Compose 部署（微服务版）
 
-目标：用 Docker Compose V2 快速搭建一套可登录的体验环境，了解各组件之间的依赖关系。
-
-包含：`gateway` 网关、`system-server`、`infra-server`、前端 Nginx、MySQL、Redis，以及可选的内置 Nacos。仅用于入门体验与测试，不是生产高可用方案；其他业务服务、SkyWalking、XXL-Job 等不在本编排中。
+目标：在服务器上用 Docker Compose 部署 `gateway`、`system-server`、`infra-server`，复用服务器上已有 Nacos、MySQL、Redis 和宿主机 Nginx。本编排不启动任何内置中间件，也不包含容器 Nginx。
 
 ## 文件列表
 
@@ -10,61 +8,93 @@
 script/docker-compose
 ├── README.md
 ├── docker-compose.yml       <-- 编排文件，相对路径均相对于本目录
+├── Dockerfile               <-- 通用 Java 服务镜像，按 JAR_FILE 构建
 ├── .env.example             <-- 环境变量示例，复制为 .env 后修改
-├── .gitignore               <-- 忽略 .env、web/dist/
-├── nginx
-│   └── default.conf         <-- 静态资源、history 回退、/admin-api、/app-api、/infra/ws 反向代理到 gateway
-└── web
-    └── dist                 <-- 需自行放入前端打包产物（不随仓库提供）
+├── .gitignore               <-- 忽略 .env、web/dist
+├── gateway-server
+│   └── full-gateway.jar
+├── system-server
+│   └── full-module-system-server.jar
+├── infra-server
+│   └── full-module-infra-server.jar
+└── nginx
+    └── default.conf         <-- 宿主机 Nginx 反向代理参考
 ```
+
+服务器上只需要这个目录和三个服务目录里的 jar，不需要 `full-gateway`、`full-module-*-server` 等源码目录，也不需要 `target` 目录。
+
+`web/` 目录不再被本编排使用，前端静态资源由宿主机 Nginx 直接提供。
+
+## 服务
 
 | 服务 | 镜像 | 说明 |
 | --- | --- | --- |
-| `mysql` | `mysql:8.4` | 首次启动导入 `sql/mysql/ruoyi-vue-pro.sql`，数据卷 `yudao-cloud_mysql-data` |
-| `redis` | `redis:7.4-alpine` | 开启密码与 AOF，数据卷 `yudao-cloud_redis-data` |
-| `nacos` | `nacos/nacos-server:v3.0.3` | 可选（profile `nacos`），单机 + 嵌入式存储，数据卷 `yudao-cloud_nacos-data` |
-| `gateway` | `full-gateway:${IMAGE_TAG}` | 由 `full-gateway/Dockerfile` 构建，端口 48080，Nacos 服务名 `gateway-server` |
-| `system-server` | `full-module-system-server:${IMAGE_TAG}` | 由模块 Dockerfile 构建，端口 48081，Nacos 服务名 `system-server` |
-| `infra-server` | `full-module-infra-server:${IMAGE_TAG}` | 由模块 Dockerfile 构建，端口 48082，Nacos 服务名 `infra-server` |
-| `web` | `nginx:1.28-alpine` | 对宿主机开放 `${WEB_PORT}`（默认 8080） |
+| `gateway` | `full-gateway:${IMAGE_TAG}` | 由同目录 Dockerfile + `gateway-server/full-gateway.jar` 构建，端口 48080，Nacos 服务名 `gateway-server` |
+| `system-server` | `full-module-system-server:${IMAGE_TAG}` | 由同目录 Dockerfile + `system-server/full-module-system-server.jar` 构建，端口 48081，Nacos 服务名 `system-server` |
+| `infra-server` | `full-module-infra-server:${IMAGE_TAG}` | 由同目录 Dockerfile + `infra-server/full-module-infra-server.jar` 构建，端口 48082，Nacos 服务名 `infra-server` |
 
-请求链路：浏览器 → `web`（Nginx）→ `gateway` → 通过 Nacos 发现 `system-server`、`infra-server`。`gateway` 只依赖 Nacos，不连接 MySQL、Redis。
+请求链路：浏览器 → 宿主机 Nginx → `gateway`（`127.0.0.1:${GATEWAY_PORT}`）→ 通过 Nacos 发现 `system-server`、`infra-server`。
 
-容器之间通过服务名访问，服务注册到 Nacos 的是容器在 Compose 网络中的 IP，网关可以直接访问。MySQL、Redis、Nacos、网关默认不映射到宿主机，不会与本机已有的 3306、6379、8848、48080 冲突；需要时取消 `docker-compose.yml` 中对应 `ports` 的注释。
+三个 Java 服务都接入 `SHARED_NETWORK`（默认 `baota_net`），直接用容器别名访问 `nacos:8848`、`mysql:3306`、`redis:6379`。
 
 ## 前置条件
 
-- Docker Engine + Docker Compose V2.20.2 及以上（`docker compose version` 可查看）。Compose V2.20.2 起支持 `depends_on.required`，清空 `COMPOSE_PROFILES` 复用已部署的 Nacos 时依赖此功能；V2.20.0 在这种情况下启动会报 `no such service: nacos`
-- Docker 实际剩余可用内存建议 4GB 以上：Docker Desktop 以分配给 Docker 虚拟机的内存为准（不是宿主机总内存），并扣除已运行容器的占用；内存不足时容器可能被 OOM 终止，可用 `docker info` 查看 `Total Memory`、`docker stats` 查看已有占用
-- JDK 25、Maven（与源码根 `pom.xml` 的 `java.version` 一致）
-- 已按前端项目的部署说明完成打包
+- Docker Engine + Docker Compose V2（`docker compose version` 可查看）
+- 已部署 Nacos、MySQL、Redis，并且它们都在 `SHARED_NETWORK`（默认 `baota_net`）里，网络别名为 `nacos`、`mysql`、`redis`
+- 宿主机已安装 Nginx
+- JDK 25、Maven（在服务器上构建 jar 时需要，与源码根 `pom.xml` 的 `java.version` 一致）
+- 已准备好前端打包产物，供宿主机 Nginx 使用
 
 ## 1. 打包后端
 
-在**源码根目录**执行：
+在源码根目录执行：
 
 ```shell
 mvn clean package -pl full-gateway,full-module-system/full-module-system-server,full-module-infra/full-module-infra-server -am -Dmaven.test.skip=true
 ```
 
-产物为 `full-gateway/target/full-gateway.jar`、`full-module-system/full-module-system-server/target/full-module-system-server.jar`、`full-module-infra/full-module-infra-server/target/full-module-infra-server.jar`，`docker compose build` 时由各模块的 Dockerfile 复制进镜像。
-
-## 2. 准备前端产物
-
-前端是独立仓库，这里不构建前端源码。打包前确认前端生产环境配置：
-
-- 浏览器访问地址使用 Nginx 的同源地址，例如 `http://localhost:8080`，不要写 `gateway`、`127.0.0.1:48080` 等容器名或后端端口
-- API 路径为 `/admin-api`：`yudao-ui-admin-vue3` 为 `.env.prod` 的 `VITE_BASE_URL` + `VITE_API_URL`；`yudao-ui-admin-vben` 为 `apps/web-*/.env.production` 的 `VITE_BASE_URL`、`VITE_GLOB_API_URL`
-- 前端 `VITE_APP_CAPTCHA_ENABLE` 与 `.env` 中的 `FULL_CAPTCHA_ENABLE` 一致
-
-将打包产物目录中的内容（包含 `index.html`）复制到 `script/docker-compose/web/dist/`，在**源码根目录**执行：
+`target` 下会生成三个 jar，复制到本目录对应的服务目录，文件名必须保持一致：
 
 ```shell
-mkdir -p script/docker-compose/web/dist
-cp -R /path/to/前端打包产物目录/. script/docker-compose/web/dist/
+mkdir -p script/docker-compose/gateway-server script/docker-compose/system-server script/docker-compose/infra-server
+cp full-gateway/target/full-gateway.jar script/docker-compose/gateway-server/
+cp full-module-system/full-module-system-server/target/full-module-system-server.jar script/docker-compose/system-server/
+cp full-module-infra/full-module-infra-server/target/full-module-infra-server.jar script/docker-compose/infra-server/
 ```
 
-例如 `yudao-ui-admin-vue3` 执行 `pnpm build:prod` 后为 `dist-prod`；`yudao-ui-admin-vben` 执行 `pnpm build:antd` 后为 `apps/web-antd/dist`。
+`docker-compose.yml` 使用同目录 `Dockerfile`，通过 `JAR_FILE` 构建参数把对应服务目录下的 jar 打进镜像，所以服务器上不需要模块源码目录和 `target` 目录。
+
+## 2. 准备外部中间件
+
+### MySQL
+
+MySQL 容器已初始化过时，`MYSQL_DATABASE`、`MYSQL_USER` 等初始化变量不会再生效，需要手动建库、建账号并导入 SQL。基础编排只部署 system、infra，导入 `sql/mysql/ruoyi-vue-pro.sql` 即可；部署其他模块时，再导入 `sql/mysql/<模块>/` 下对应的 SQL。
+
+```shell
+docker exec -i mysql-mysql-1 sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' <<'SQL'
+CREATE DATABASE IF NOT EXISTS `ruoyi-vue-pro` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'yudao'@'%' IDENTIFIED BY '你的业务账号密码';
+GRANT ALL PRIVILEGES ON `ruoyi-vue-pro`.* TO 'yudao'@'%';
+FLUSH PRIVILEGES;
+SQL
+```
+
+```shell
+docker exec -i mysql-mysql-1 sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" ruoyi-vue-pro' < sql/mysql/ruoyi-vue-pro.sql
+```
+
+SQL 文件包含 `DROP TABLE IF EXISTS`，只能对空的 `ruoyi-vue-pro` 库执行。
+
+### Redis
+
+项目各服务默认使用 `REDIS_DATABASE=1`，确认该库未被其他应用占用，或修改 `.env` 中的库号。
+
+### Nacos
+
+- `NACOS_SERVER_ADDR=nacos:8848`，客户端同时使用 HTTP 8848 和 gRPC 9848。
+- 本分支 `nacos-client` 为 3.1.1，服务端 Nacos 2.4.2 的基础注册/配置通常兼容；若注册异常，优先升级 Nacos 3.x。
+- 开启鉴权时填写 `NACOS_USERNAME`、`NACOS_PASSWORD`。
+- `NACOS_NAMESPACE` 填控制台命名空间的 **ID**，不是名称。
 
 ## 3. 配置环境变量
 
@@ -73,48 +103,26 @@ cd script/docker-compose
 cp .env.example .env
 ```
 
-按需修改 `.env`，至少替换 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`REDIS_PASSWORD` 三个示例密码；使用内置 Nacos 时同时替换 `NACOS_AUTH_TOKEN`、`NACOS_AUTH_IDENTITY_VALUE`。
-
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `WEB_PORT` | `8080` | 前端访问端口 |
+| `SHARED_NETWORK` | `baota_net` | 应用容器接入的中间件网络名 |
+| `GATEWAY_PORT` | `48080` | 宿主机 Nginx 反向代理网关的端口，只绑定 `127.0.0.1` |
 | `IMAGE_TAG` | `local` | 后端镜像 tag |
+| `MYSQL_HOST` / `MYSQL_PORT` | `mysql` / `3306` | MySQL 地址与端口（容器网络内） |
 | `MYSQL_DATABASE` | `ruoyi-vue-pro` | 数据库名 |
-| `MYSQL_ROOT_PASSWORD` | 示例值 | MySQL root 密码，仅供初始化与运维使用 |
-| `MYSQL_USER` / `MYSQL_PASSWORD` | `yudao` / 示例值 | 应用使用的账号，只拥有 `MYSQL_DATABASE` 库权限 |
+| `MYSQL_USER` / `MYSQL_PASSWORD` | `yudao` / 示例值 | 应用使用的数据库账号 |
+| `REDIS_HOST` / `REDIS_PORT` | `redis` / `6379` | Redis 地址与端口（容器网络内） |
+| `REDIS_DATABASE` | `1` | Redis 数据库索引 |
 | `REDIS_PASSWORD` | 示例值 | Redis 密码 |
 | `SPRING_PROFILES_ACTIVE` | `dev` | 后端 profile，同时决定 Nacos Data ID 后缀 |
 | `JAVA_OPTS` | `-Xms512m -Xmx512m` | JVM 参数，三个 Java 服务共用 |
 | `FULL_CAPTCHA_ENABLE` | `true` | 是否开启登录验证码 |
-| `COMPOSE_PROFILES` | `nacos` | 为 `nacos` 时启动内置 Nacos；复用已部署的 Nacos 时清空 |
 | `NACOS_SERVER_ADDR` | `nacos:8848` | Nacos 地址，必须是**容器内**可访问的地址 |
 | `NACOS_NAMESPACE` | `public` | 命名空间 ID，注册中心与配置中心共用 |
 | `NACOS_GROUP` | `DEFAULT_GROUP` | 分组，注册中心与配置中心共用 |
 | `NACOS_USERNAME` / `NACOS_PASSWORD` | 空 | Nacos 开启鉴权时填写 |
-| `NACOS_AUTH_TOKEN` / `NACOS_AUTH_IDENTITY_KEY` / `NACOS_AUTH_IDENTITY_VALUE` | 示例值 | 内置 Nacos 3.x 启动必填参数 |
 
-`docker-compose.yml` 通过环境变量覆盖 `application-dev.yaml` 中的以下配置，其余配置仍使用 `application.yaml`、`application-dev.yaml`：
-
-- 数据库主库 `master`、从库 `slave`，Redis：指向 Compose 内的 `mysql`、`redis`
-- Nacos 地址、账号、命名空间、分组：`spring.cloud.nacos.*`
-- `xxl.job.enabled=false`：本编排不提供 XXL-Job 调度中心
-- `full.demo=false`：`application-dev.yaml` 默认开启的演示模式会禁止写操作
-
-## 4. Nacos 说明
-
-**内置 Nacos（默认）**：`COMPOSE_PROFILES=nacos`，Java 服务等待 Nacos 的 8848、9848 端口可连接后再启动。内置 Nacos 未开启客户端访问鉴权，且端口默认不对宿主机开放，只适合本机体验。首次访问控制台（取消 `ports` 注释后打开 http://127.0.0.1:18080）需要初始化 `nacos` 用户的密码。
-
-**复用已部署的 Nacos**：本分支使用 `spring-cloud-alibaba` 2025.1.0.0，对应 `nacos-client` 3.1.1，建议使用 Nacos 3.x；内置 Nacos 3.0.3 已验证当前客户端的注册、发现与 `public` 命名空间配置读写。在 `.env` 中：
-
-1. 清空 `COMPOSE_PROFILES`（`COMPOSE_PROFILES=`），不再启动内置 Nacos。
-2. `NACOS_SERVER_ADDR` 填容器内可访问的地址。容器内的 `127.0.0.1` 指向容器自身；Nacos 部署在本机时使用 `host.docker.internal:8848`（已为 Java 服务配置 `host-gateway`）。客户端同时使用 HTTP 端口和 gRPC 端口（HTTP 端口 + 1000，默认 9848），两个端口都要放通。
-3. `NACOS_NAMESPACE` 填命名空间 **ID**，该命名空间需已存在；`NACOS_GROUP` 填分组。
-4. Nacos 开启鉴权时，填写 `NACOS_USERNAME`、`NACOS_PASSWORD`。
-5. 建议使用独立的命名空间或分组。若同一命名空间、分组下还有本机 IDE 启动的同名服务，网关可能把请求转发到容器无法访问的实例。
-
-**配置优先级**：各服务会加载 Nacos 中命名空间 `NACOS_NAMESPACE`、分组 `NACOS_GROUP` 下的 Data ID `${spring.application.name}-${SPRING_PROFILES_ACTIVE}.yaml`（例如 `gateway-server-dev.yaml`、`system-server-dev.yaml`、`infra-server-dev.yaml`），不存在时忽略。优先级从高到低为：`docker-compose.yml` 中的环境变量 > Nacos Data ID > jar 内的 `application-dev.yaml` > `application.yaml`。因此 Data ID 中的数据库、Redis、Nacos 配置会被上述环境变量覆盖，其他配置项会覆盖 jar 内配置。
-
-## 5. 构建并启动
+## 4. 启动
 
 以下命令均在 `script/docker-compose` 目录执行：
 
@@ -130,58 +138,183 @@ docker compose ps
 docker compose logs -f gateway system-server infra-server
 ```
 
-首次启动时 MySQL 需要导入 SQL，`system-server`、`infra-server` 会等到 MySQL、Redis（以及内置 Nacos）健康检查通过后再启动。三个服务日志分别出现 `Started GatewayServerApplication`、`Started SystemServerApplication`、`Started InfraServerApplication`，并在 Nacos 中注册后访问：
-
-- 管理后台：http://localhost:8080 （`WEB_PORT` 修改后对应调整）
+三个服务日志分别出现 `Started GatewayServerApplication`、`Started SystemServerApplication`、`Started InfraServerApplication`，并在 Nacos 中注册后，即可通过宿主机 Nginx 访问。
 
 服务刚启动时网关可能短暂返回 503（尚未从 Nacos 拉取到实例），稍等后刷新即可。
+
+## 5. 宿主机 Nginx
+
+`nginx/default.conf` 是反向代理参考，用于宿主机 Nginx 时需要调整：
+
+- 把 `resolver 127.0.0.11` 和 `set $yudao_backend http://gateway:48080` 去掉，改成 `proxy_pass http://127.0.0.1:48080;`（端口与 `GATEWAY_PORT` 一致）
+- `map $http_upgrade $connection_upgrade` 必须放在 http 级（`nginx.conf` 或 http 级 include 文件），不能放在 server 块里
+- 前端静态资源目录、域名、HTTPS 证书按宿主机实际情况配置
+- 保留 `/admin-api`、`/app-api`、`/infra/ws` 的代理规则和 `client_max_body_size 32m`
 
 ## 6. 更新
 
 ```shell
-# 后端：回到源码根目录重新打包，再回到本目录重建、重启
+# 后端：回到源码根目录重新打包，复制新 jar 后重建、重启
 cd ../..
 mvn clean package -pl full-gateway,full-module-system/full-module-system-server,full-module-infra/full-module-infra-server -am -Dmaven.test.skip=true
+cp full-gateway/target/full-gateway.jar script/docker-compose/gateway-server/
+cp full-module-system/full-module-system-server/target/full-module-system-server.jar script/docker-compose/system-server/
+cp full-module-infra/full-module-infra-server/target/full-module-infra-server.jar script/docker-compose/infra-server/
 cd script/docker-compose
 docker compose up -d --build gateway system-server infra-server
-
-# 前端：清空 web/dist/ 内的文件（保留 dist 目录本身）后复制新产物，再重启 web；修改 nginx/default.conf 后同样执行
-rm -rf web/dist/*
-cp -R /path/to/前端打包产物目录/. web/dist/
-docker compose restart web
 ```
 
-只更新某个服务时，打包与 `docker compose up -d --build` 只写对应模块即可。如需回滚，可在打包前修改 `.env` 的 `IMAGE_TAG`，保留旧 tag 的镜像。
+如需回滚，可在打包前修改 `.env` 的 `IMAGE_TAG`，保留旧 tag 的镜像。
 
-## 7. 停止与数据
+## 7. 停止
 
 ```shell
-# 停止并删除容器，保留数据卷
 docker compose down
 ```
 
-**不要执行 `docker compose down -v`**，它会删除 `yudao-cloud_mysql-data`、`yudao-cloud_redis-data`、`yudao-cloud_nacos-data` 数据卷，数据库内容将全部丢失。
+MySQL、Redis、Nacos 的数据都在外部容器中，本编排不创建数据卷，`docker compose down` 不会影响业务数据。
 
-## 数据库初始化说明
+## 8. 后续新增服务或文件
 
-- SQL 只在 `mysql-data` 数据卷为空（首次启动）时执行一次；之后修改 SQL 文件、`.env` 中的 `MYSQL_*` 账号密码，都不会作用于已有数据库。
-- 首次导入中途失败（例如容器被强制停止），数据卷会处于半初始化状态，需要确认数据可丢弃后执行 `docker compose down`、`docker volume rm yudao-cloud_mysql-data` 再重新启动。
-- 已有数据卷升级到新版本时，SQL 不会自动执行。请先备份，再手动执行对应的升级 SQL，例如：
+三个原则：
+
+- 不要长期在容器里直接改文件，容器重建后改动会丢失。
+- 只重建受影响的服务，不要 `docker compose down` 整个项目；`docker compose up -d --build <服务名>` 只重建指定服务。
+- 每次修改 `docker-compose.yml` 或 `.env` 后，先执行 `docker compose config` 检查。
+
+### 8.1 给现有服务增加配置文件
+
+文件需要持久生效时，用 bind mount 挂载到宿主机目录：
+
+1. 在宿主机对应服务目录下放文件，例如：
+
+   ```text
+   /work/full-cloud/system-server/config/application-extra.yaml
+   ```
+
+2. 在 `docker-compose.yml` 的对应服务下增加挂载：
+
+   ```yaml
+   system-server:
+     volumes:
+       - ./system-server/config/application-extra.yaml:/app/config/application-extra.yaml:ro
+   ```
+
+3. 让应用读取该文件，例如在服务 `environment` 中增加：
+
+   ```yaml
+   SPRING_CONFIG_ADDITIONAL_LOCATION: file:/app/config/application-extra.yaml
+   ```
+
+4. 只重建该服务：
+
+   ```shell
+   docker compose up -d system-server
+   ```
+
+5. 查看日志确认配置已加载：
+
+   ```shell
+   docker compose logs -f system-server
+   ```
+
+如果文件必须打进镜像（例如证书、启动脚本），推荐给该服务单独写一个 Dockerfile 并在 compose 中指定 `build.dockerfile`；不要用 `docker cp` 作为长期方案，容器重建后文件会丢失。
+
+### 8.2 新增一个 Java 服务（以 bpm-server 为例）
+
+1. 打包并生成 jar：
+
+   ```shell
+   mvn clean package -pl full-module-bpm/full-module-bpm-server -am -Dmaven.test.skip=true
+   ```
+
+2. 上传到宿主机新目录，目录名与 compose 中的路径一致：
+
+   ```text
+   /work/full-cloud/bpm-server/full-module-bpm-server.jar
+   ```
+
+3. 在 `docker-compose.yml` 增加服务块：
+
+   ```yaml
+   bpm-server:
+     build:
+       context: .
+       dockerfile: Dockerfile
+       args:
+         JAR_FILE: bpm-server/full-module-bpm-server.jar
+         APP_PORT: "48083" # 以模块 application.yaml 的 server.port 为准
+     image: full-module-bpm-server:${IMAGE_TAG:-local}
+     restart: unless-stopped
+     networks:
+       - baota_net
+     environment:
+       <<: *app-env
+   ```
+
+   - 需要 MySQL、Redis 的模块用 `*app-env`。
+   - 只需要 Nacos 注册/配置的模块可以用 `*common-env`。
+   - 如果模块需要额外的环境变量，在 `.env` 中定义后加到该服务的 `environment`。
+
+4. 如果模块有独立 SQL，先导入 `sql/mysql/<模块>/` 下对应脚本。
+
+5. 校验并只启动新服务：
+
+   ```shell
+   docker compose config
+   docker compose up -d --build bpm-server
+   docker compose logs -f bpm-server
+   ```
+
+6. 确认 Nacos 中出现了新服务实例。
+
+7. 网关路由：`full-gateway/src/main/resources/application.yaml` 已包含 bpm 的 `/admin-api/bpm/**` 路由。如果新增模块没有对应路由，需要先在 gateway 的应用配置里补上，再重建网关：
+
+   ```shell
+   docker compose up -d --build gateway
+   ```
+
+### 8.3 给已有服务更新 jar
+
+1. 覆盖对应服务目录下的 jar，例如：
+
+   ```shell
+   cp full-gateway/target/full-gateway.jar /work/full-cloud/gateway-server/
+   ```
+
+2. 只重建该服务：
+
+   ```shell
+   cd /work/full-cloud
+   docker compose up -d --build gateway
+   ```
+
+3. 需要回滚时，在覆盖前备份旧 jar，或用不同的 `IMAGE_TAG` 保留旧镜像。
+
+### 8.4 临时文件（不推荐长期使用）
+
+只用于临时排查时，可以用：
 
 ```shell
-docker compose exec -T mysql sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' < /path/to/upgrade.sql
+docker cp ./some-file <容器名>:/app/
 ```
 
-- 使用外部 MySQL 时：自行导入 `sql/mysql/ruoyi-vue-pro.sql`，删除 `docker-compose.yml` 中的 `mysql` 服务及各服务对它的 `depends_on`，并把 `x-app-env` 中的 `SPRING_DATASOURCE_DYNAMIC_DATASOURCE_MASTER_*`、`SLAVE_*` 改为外部地址；容器内的 `127.0.0.1` 指向容器自身，不是宿主机。
+容器重建后文件会丢失，正式方案仍然是 bind mount 或重建镜像。
 
-## 其他分支同步替换点
+### 8.5 新增环境变量
 
-本目录按 JDK 25 + Spring Boot 4.x 分支编写（各模块 Dockerfile 基础镜像 `eclipse-temurin:25-jre`，Redis 使用 `SPRING_DATA_REDIS_*`，`nacos-client` 3.1.1）。与其他分支同步时，只需替换：
+1. 在 `.env` 中增加变量。
+2. 在对应服务的 `environment` 中引用，例如：
 
-| 分支 | 后端 Dockerfile 基础镜像 | Redis 环境变量前缀 |
-| --- | --- | --- |
-| JDK 8 + Spring Boot 2.x | `eclipse-temurin:8-jre` | `SPRING_REDIS_*`（`spring.redis.*`） |
-| JDK 17 + Spring Boot 3.x | `eclipse-temurin:17-jre` | `SPRING_DATA_REDIS_*`（`spring.data.redis.*`） |
-| JDK 25 + Spring Boot 4.x | `eclipse-temurin:25-jre` | `SPRING_DATA_REDIS_*`（`spring.data.redis.*`） |
+   ```yaml
+   environment:
+     MY_VAR: ${MY_VAR}
+   ```
 
-并核对该分支各服务 `application-*.yaml` 的数据源、Redis、Nacos 配置项，`spring-cloud-alibaba` 对应的 `nacos-client` 版本（按服务端对该客户端的兼容性选择 Nacos 镜像版本），以及 `sql/mysql` 下的 SQL 文件名。
+3. 只重建对应服务：
+
+   ```shell
+   docker compose up -d <服务名>
+   ```
+
+`.env` 包含密码，不要提交到仓库，也不要放进 Nginx 站点目录。
