@@ -104,6 +104,7 @@ full-cloud
 │   ├── sentinel               # Sentinel 规则与示例
 │   └── sharding               # 分库分表示例
 ├── sql                        # 各数据库初始化脚本（mysql、postgresql、oracle 等）
+│   └── sync                   # SQL 脚本同步管理工具（见 sql/sync/README.md）
 └── pom.xml
 ```
 
