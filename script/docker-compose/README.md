@@ -37,6 +37,50 @@ script/docker-compose
 
 三个 Java 服务都接入 `SHARED_NETWORK`（默认 `baota_net`），直接用容器别名访问 `nacos:8848`、`mysql:3306`、`redis:6379`。
 
+## 内存要求与 JVM 参数
+
+三个服务都是 JVM 进程，除堆内存外还要占用元空间、代码缓存、直接内存和线程栈。旧的默认值 `-Xms512m -Xmx512m` 会让三个进程在启动时就提交 1.5G 堆内存，加上非堆内存后超过 2G；在只剩约 2G 可用内存的服务器上会触发宿主机 OOM，表现为服务器卡死、SSH 断开。
+
+本编排默认按小内存服务器收紧如下（可在 `.env` 覆盖）：
+
+| 服务 | 堆内存 | 元空间 / 代码缓存 / 直接内存上限 | 容器内存上限 |
+| --- | --- | --- | --- |
+| `gateway` | 128m ~ 256m | 160m / 48m / 96m | 512m |
+| `system-server` | 192m ~ 320m | 192m / 64m / 96m | 640m |
+| `infra-server` | 192m ~ 320m | 192m / 64m / 96m | 640m |
+
+三个容器合计上限约 1.75G，正常运行时约 1.1G ~ 1.5G（本地实测网关空载常驻内存约 200m）。统一附加的参数：
+
+- `-XX:ActiveProcessorCount=2`：不按宿主机全部 CPU 核数创建 GC、Netty 和线程池线程，减少线程栈占用
+- `-XX:+UseSerialGC`：小堆下比 G1 占用更少的线程和 native 内存
+- `-XX:+ExitOnOutOfMemoryError`：内存溢出时直接退出并由 `restart` 策略重启，避免进程半死不活
+- `memswap_limit` 与 `mem_limit` 相同：容器不占用 swap，内存超限时只杀容器，不会把宿主机拖入 swap 假死
+
+内存充足（例如服务器可用内存 6G 以上）时，再通过 `.env` 调整：
+
+```ini
+GATEWAY_JAVA_OPTS=-Xms256m -Xmx512m -XX:MaxMetaspaceSize=192m -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=128m -Xss512k -XX:ActiveProcessorCount=4
+GATEWAY_MEM_LIMIT=1280m
+APP_JAVA_OPTS=-Xms512m -Xmx768m -XX:MaxMetaspaceSize=256m -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=128m -Xss512k -XX:ActiveProcessorCount=4
+APP_MEM_LIMIT=1536m
+```
+
+`mem_limit` 必须大于“堆 + 非堆 + 线程栈”的总和，否则容器会先被 Docker OOM Kill。排查命令：
+
+```shell
+docker stats --no-stream
+docker inspect -f '{{.Name}} OOMKilled={{.State.OOMKilled}} Exit={{.State.ExitCode}}' $(docker compose ps -q)
+docker compose logs --tail=200 gateway system-server infra-server
+```
+
+服务器内存紧张时，建议按 `gateway` → `system-server` → `infra-server` 顺序逐个启动，避免三个 JVM 同时做类加载和 JIT 编译：
+
+```shell
+docker compose up -d --build gateway
+docker compose up -d system-server
+docker compose up -d infra-server
+```
+
 ## 前置条件
 
 - Docker Engine + Docker Compose V2（`docker compose version` 可查看）
@@ -115,12 +159,17 @@ cp .env.example .env
 | `REDIS_DATABASE` | `1` | Redis 数据库索引 |
 | `REDIS_PASSWORD` | 示例值 | Redis 密码 |
 | `SPRING_PROFILES_ACTIVE` | `dev` | 后端 profile，同时决定 Nacos Data ID 后缀 |
-| `JAVA_OPTS` | `-Xms512m -Xmx512m` | JVM 参数，三个 Java 服务共用 |
+| `GATEWAY_JAVA_OPTS` | 见「内存要求与 JVM 参数」 | 网关 JVM 参数 |
+| `GATEWAY_MEM_LIMIT` | `512m` | 网关容器内存上限 |
+| `APP_JAVA_OPTS` | 见「内存要求与 JVM 参数」 | `system-server`、`infra-server` 共用的 JVM 参数 |
+| `APP_MEM_LIMIT` | `640m` | `system-server`、`infra-server` 各自的容器内存上限 |
 | `FULL_CAPTCHA_ENABLE` | `true` | 是否开启登录验证码 |
 | `NACOS_SERVER_ADDR` | `nacos:8848` | Nacos 地址，必须是**容器内**可访问的地址 |
 | `NACOS_NAMESPACE` | `public` | 命名空间 ID，注册中心与配置中心共用 |
 | `NACOS_GROUP` | `DEFAULT_GROUP` | 分组，注册中心与配置中心共用 |
 | `NACOS_USERNAME` / `NACOS_PASSWORD` | 空 | Nacos 开启鉴权时填写 |
+
+> 旧版 `.env` 中的 `JAVA_OPTS` 已不再使用，保留也不影响；升级后直接使用上面的默认值。
 
 ## 4. 启动
 
@@ -137,6 +186,8 @@ docker compose up -d --build
 docker compose ps
 docker compose logs -f gateway system-server infra-server
 ```
+
+如果服务器可用内存接近 2G，优先使用上文「内存要求与 JVM 参数」中的逐个启动命令，等前一个服务启动完成、内存稳定后再启动下一个。
 
 三个服务日志分别出现 `Started GatewayServerApplication`、`Started SystemServerApplication`、`Started InfraServerApplication`，并在 Nacos 中注册后，即可通过宿主机 Nginx 访问。
 
@@ -250,11 +301,14 @@ MySQL、Redis、Nacos 的数据都在外部容器中，本编排不创建数据�
        - baota_net
      environment:
        <<: *app-env
+     mem_limit: ${APP_MEM_LIMIT:-640m}
+     memswap_limit: ${APP_MEM_LIMIT:-640m}
    ```
 
-   - 需要 MySQL、Redis 的模块用 `*app-env`。
-   - 只需要 Nacos 注册/配置的模块可以用 `*common-env`。
+   - 需要 MySQL、Redis 的模块用 `*app-env`，会自动带上小内存 JVM 参数。
+   - 只需要 Nacos 注册/配置的模块可以用 `*common-env`；这种服务不会继承 `APP_JAVA_OPTS`，使用镜像内默认 JVM 参数，`mem_limit` 仍要按同样方式加上。
    - 如果模块需要额外的环境变量，在 `.env` 中定义后加到该服务的 `environment`。
+   - 新增服务后请重新核算总内存，所有 `mem_limit` 之和不要超过服务器可用内存的 80%。
 
 4. 如果模块有独立 SQL，先导入 `sql/mysql/<模块>/` 下对应脚本。
 

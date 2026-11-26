@@ -2,13 +2,14 @@
 # Nacos、MySQL、Redis、Nginx 复用服务器上已部署的服务，本编排不启动内置中间件
 # 使用说明见同目录 README.md
 # 本文件中的相对路径，均相对于本文件所在目录，与执行命令时的当前目录无关
+# 默认 JVM 参数和容器内存上限按 2G 可用内存的服务器收紧，调优说明见 README.md「内存要求与 JVM 参数」
 
 name: full-cloud
 
-# 所有 Java 服务共用：profile、JVM 参数、Nacos 注册中心 + 配置中心
+# 所有 Java 服务共用：profile、Nacos 注册中心 + 配置中心
+# 注意：不再使用统一的 JAVA_OPTS，JVM 参数按服务在下面分别配置
 x-common-env: &common-env
   SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
-  JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx512m}
   SPRING_CLOUD_NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
   SPRING_CLOUD_NACOS_USERNAME: ${NACOS_USERNAME:-}
   SPRING_CLOUD_NACOS_PASSWORD: ${NACOS_PASSWORD:-}
@@ -20,6 +21,8 @@ x-common-env: &common-env
 # system-server、infra-server 共用：数据库、Redis，以及 application-dev.yaml 中需要关闭的外部依赖
 x-app-env: &app-env
   <<: *common-env
+  # 业务服务 JVM：堆 192~320m，非堆内存各项设上限，避免小内存服务器被拖死
+  JAVA_OPTS: ${APP_JAVA_OPTS:--Xms192m -Xmx320m -XX:MaxMetaspaceSize=192m -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=96m -Xss512k -XX:ActiveProcessorCount=2 -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError}
   # 数据库：主库、从库都要覆盖，否则会使用 application-${SPRING_PROFILES_ACTIVE}.yaml 中的 127.0.0.1
   SPRING_DATASOURCE_DYNAMIC_DATASOURCE_MASTER_URL: jdbc:mysql://${MYSQL_HOST:-mysql}:${MYSQL_PORT:-3306}/${MYSQL_DATABASE:-ruoyi-vue-pro}?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true
   SPRING_DATASOURCE_DYNAMIC_DATASOURCE_MASTER_USERNAME: ${MYSQL_USER:-yudao}
@@ -52,6 +55,11 @@ services:
       - baota_net
     environment:
       <<: *common-env
+      # 网关 JVM：堆 128~256m
+      JAVA_OPTS: ${GATEWAY_JAVA_OPTS:--Xms128m -Xmx256m -XX:MaxMetaspaceSize=160m -XX:ReservedCodeCacheSize=48m -XX:MaxDirectMemorySize=96m -Xss512k -XX:ActiveProcessorCount=2 -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError}
+    # 容器内存上限：超出时只影响本容器，不会把宿主机拖入 swap/OOM
+    mem_limit: ${GATEWAY_MEM_LIMIT:-512m}
+    memswap_limit: ${GATEWAY_MEM_LIMIT:-512m}
     # 供宿主机已安装的 Nginx 反向代理；只绑定回环地址，不直接对外
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-48080}:48080"
@@ -71,6 +79,8 @@ services:
       <<: *app-env
       # 需与前端打包时的 VITE_APP_CAPTCHA_ENABLE 一致
       FULL_CAPTCHA_ENABLE: ${FULL_CAPTCHA_ENABLE:-true}
+    mem_limit: ${APP_MEM_LIMIT:-640m}
+    memswap_limit: ${APP_MEM_LIMIT:-640m}
 
   infra-server:
     build:
@@ -85,6 +95,8 @@ services:
       - baota_net
     environment:
       <<: *app-env
+    mem_limit: ${APP_MEM_LIMIT:-640m}
+    memswap_limit: ${APP_MEM_LIMIT:-640m}
 
 networks:
   # 服务器已有 Nacos/MySQL/Redis 所在网络；本地首次运行时需先 docker network create baota_net
